@@ -32,6 +32,8 @@ import android.view.KeyEvent;
 import com.google.android.things.bluetooth.BluetoothProfileManager;
 import com.google.android.things.contrib.driver.button.Button;
 import com.google.android.things.contrib.driver.button.ButtonInputDriver;
+import com.google.android.things.pio.Gpio;
+import com.google.android.things.pio.PeripheralManagerService;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -41,37 +43,28 @@ import java.util.Objects;
 
 /**
  * Sample usage of the A2DP sink bluetooth profile. At startup, this activity sets the Bluetooth
- * adapter in pairing mode for {@link #DISCOVERABLE_TIMEOUT_MS} ms.
- *
+ * adapter in pairing mode for {@link #DISCOVERABLE_TIMEOUT_S} s.
+ * <p>
  * To re-enable pairing mode, press "p" on an attached keyboard, use "adb shell input keyevent 44"
  * or press a button attached to the GPIO pin returned by {@link BoardDefaults#getGPIOForPairing()}
- *
- *  To forcefully disconnect any connected A2DP device, press "d" on an attached keyboard, use
- *  "adb shell input keyevent 32" or press a button attached to the GPIO pin
- *  returned by {@link BoardDefaults#getGPIOForDisconnectAllBTDevices()}
-
- *
+ * <p>
+ * To forcefully disconnect any connected A2DP device, press "d" on an attached keyboard, use
+ * "adb shell input keyevent 32" or press the pairing button again while connected.
+ * <p>
  * NOTE: While in pairing mode, pairing requests are auto-accepted - at this moment there's no
  * way to block specific pairing attempts while in pairing mode. This is known limitation that is
  * being worked on.
- *
  */
 public class A2dpSinkActivity extends Activity {
     private static final String TAG = "A2dpSinkActivity";
-
-    private static final String ADAPTER_FRIENDLY_NAME = "My Android Things device";
-    private static final int DISCOVERABLE_TIMEOUT_MS = 300;
+    private static final String ADAPTER_FRIENDLY_NAME = "grubFX Jukebox";
+    private static final int DISCOVERABLE_TIMEOUT_S = 10;
     private static final int REQUEST_CODE_ENABLE_DISCOVERABLE = 100;
-
-    private static final String UTTERANCE_ID =
-            "com.example.androidthings.bluetooth.audio.UTTERANCE_ID";
-
+    private static final String UTTERANCE_ID = "net.felixgruber.www.samples.bluetooth.audio.UTTERANCE_ID";
     private BluetoothAdapter mBluetoothAdapter;
     private BluetoothProfile mA2DPSinkProxy;
-
     private ButtonInputDriver mPairingButtonDriver;
-    private ButtonInputDriver mDisconnectAllButtonDriver;
-
+    private Gpio mLedGpio;
     private TextToSpeech mTtsEngine;
 
     /**
@@ -105,13 +98,14 @@ public class A2dpSinkActivity extends Activity {
                 int oldState = A2dpSinkHelper.getPreviousProfileState(intent);
                 int newState = A2dpSinkHelper.getCurrentProfileState(intent);
                 BluetoothDevice device = A2dpSinkHelper.getDevice(intent);
-                Log.d(TAG, "Bluetooth A2DP sink changing connection state from " + oldState +
-                        " to " + newState + " device " + device);
+                Log.d(TAG, "Bluetooth A2DP sink changing connection state from " + oldState + " to " + newState + " device " + device);
                 if (device != null) {
                     String deviceName = Objects.toString(device.getName(), "a device");
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
+                        setLedValue(true);
                         speak("Connected to " + deviceName);
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                        setLedValue(false);
                         speak("Disconnected from " + deviceName);
                     }
                 }
@@ -132,8 +126,7 @@ public class A2dpSinkActivity extends Activity {
                 int oldState = A2dpSinkHelper.getPreviousProfileState(intent);
                 int newState = A2dpSinkHelper.getCurrentProfileState(intent);
                 BluetoothDevice device = A2dpSinkHelper.getDevice(intent);
-                Log.d(TAG, "Bluetooth A2DP sink changing playback state from " + oldState +
-                        " to " + newState + " device " + device);
+                Log.d(TAG, "Bluetooth A2DP sink changing playback state from " + oldState + " to " + newState + " device " + device);
                 if (device != null) {
                     if (newState == A2dpSinkHelper.STATE_PLAYING) {
                         Log.i(TAG, "Playing audio from device " + device.getAddress());
@@ -158,12 +151,9 @@ public class A2dpSinkActivity extends Activity {
         // We use Text-to-Speech to indicate status change to the user
         initTts();
 
-        registerReceiver(mAdapterStateChangeReceiver, new IntentFilter(
-                BluetoothAdapter.ACTION_STATE_CHANGED));
-        registerReceiver(mSinkProfileStateChangeReceiver, new IntentFilter(
-                A2dpSinkHelper.ACTION_CONNECTION_STATE_CHANGED));
-        registerReceiver(mSinkProfilePlaybackChangeReceiver, new IntentFilter(
-                A2dpSinkHelper.ACTION_PLAYING_STATE_CHANGED));
+        registerReceiver(mAdapterStateChangeReceiver, new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED));
+        registerReceiver(mSinkProfileStateChangeReceiver, new IntentFilter(A2dpSinkHelper.ACTION_CONNECTION_STATE_CHANGED));
+        registerReceiver(mSinkProfilePlaybackChangeReceiver, new IntentFilter(A2dpSinkHelper.ACTION_PLAYING_STATE_CHANGED));
 
         if (mBluetoothAdapter.isEnabled()) {
             Log.d(TAG, "Bluetooth Adapter is already enabled.");
@@ -180,6 +170,7 @@ public class A2dpSinkActivity extends Activity {
         switch (keyCode) {
             case KeyEvent.KEYCODE_P:
                 // Enable Pairing mode (discoverable)
+                disconnectConnectedDevices();
                 enableDiscoverable();
                 return true;
             case KeyEvent.KEYCODE_D:
@@ -198,17 +189,18 @@ public class A2dpSinkActivity extends Activity {
         try {
             if (mPairingButtonDriver != null) mPairingButtonDriver.close();
         } catch (IOException e) { /* close quietly */}
+        mPairingButtonDriver = null;
         try {
-            if (mDisconnectAllButtonDriver != null) mDisconnectAllButtonDriver.close();
+            if (mLedGpio != null) mLedGpio.close();
         } catch (IOException e) { /* close quietly */}
+        mLedGpio = null;
 
         unregisterReceiver(mAdapterStateChangeReceiver);
         unregisterReceiver(mSinkProfileStateChangeReceiver);
         unregisterReceiver(mSinkProfilePlaybackChangeReceiver);
 
         if (mA2DPSinkProxy != null) {
-            mBluetoothAdapter.closeProfileProxy(A2dpSinkHelper.A2DP_SINK_PROFILE,
-                    mA2DPSinkProxy);
+            mBluetoothAdapter.closeProfileProxy(A2dpSinkHelper.A2DP_SINK_PROFILE, mA2DPSinkProxy);
         }
 
         if (mTtsEngine != null) {
@@ -216,8 +208,7 @@ public class A2dpSinkActivity extends Activity {
             mTtsEngine.shutdown();
         }
 
-        // we intentionally leave the Bluetooth adapter enabled, so that other samples can use it
-        // without having to initialize it.
+        // we intentionally leave the Bluetooth adapter enabled, so that other samples can use it without having to initialize it.
     }
 
     private void setupBTProfiles() {
@@ -226,9 +217,7 @@ public class A2dpSinkActivity extends Activity {
         if (!enabledProfiles.contains(A2dpSinkHelper.A2DP_SINK_PROFILE)) {
             Log.d(TAG, "Enabling A2dp sink mode.");
             List<Integer> toDisable = Arrays.asList(BluetoothProfile.A2DP);
-            List<Integer> toEnable = Arrays.asList(
-                A2dpSinkHelper.A2DP_SINK_PROFILE,
-                A2dpSinkHelper.AVRCP_CONTROLLER_PROFILE);
+            List<Integer> toEnable = Arrays.asList(A2dpSinkHelper.A2DP_SINK_PROFILE, A2dpSinkHelper.AVRCP_CONTROLLER_PROFILE);
             bluetoothProfileManager.enableAndDisableProfiles(toEnable, toDisable);
         } else {
             Log.d(TAG, "A2dp sink profile is enabled.");
@@ -252,24 +241,24 @@ public class A2dpSinkActivity extends Activity {
                 mA2DPSinkProxy = proxy;
                 enableDiscoverable();
             }
+
             @Override
             public void onServiceDisconnected(int profile) {
             }
         }, A2dpSinkHelper.A2DP_SINK_PROFILE);
 
         configureButton();
+        configureLed();
     }
 
     /**
      * Enable the current {@link BluetoothAdapter} to be discovered (available for pairing) for
-     * the next {@link #DISCOVERABLE_TIMEOUT_MS} ms.
+     * the next {@link #DISCOVERABLE_TIMEOUT_S} seconds.
      */
     private void enableDiscoverable() {
         Log.d(TAG, "Registering for discovery.");
-        Intent discoverableIntent =
-                new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
-        discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION,
-                DISCOVERABLE_TIMEOUT_MS);
+        Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+        discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, DISCOVERABLE_TIMEOUT_S);
         startActivityForResult(discoverableIntent, REQUEST_CODE_ENABLE_DISCOVERABLE);
     }
 
@@ -280,19 +269,17 @@ public class A2dpSinkActivity extends Activity {
             Log.d(TAG, "Enable discoverable returned with result " + resultCode);
 
             // ResultCode, as described in BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE, is either
-            // RESULT_CANCELED or the number of milliseconds that the device will stay in
+            // RESULT_CANCELED or the number of seconds that the device will stay in
             // discoverable mode. In a regular Android device, the user will see a popup requesting
             // authorization, and if they cancel, RESULT_CANCELED is returned. In Android Things,
             // on the other hand, the authorization for pairing is always given without user
             // interference, so RESULT_CANCELED should never be returned.
             if (resultCode == RESULT_CANCELED) {
-                Log.e(TAG, "Enable discoverable has been cancelled by the user. " +
-                        "This should never happen in an Android Things device.");
+                Log.e(TAG, "Enable discoverable has been cancelled by the user. This should never happen in an Android Things device.");
                 return;
             }
-            Log.i(TAG, "Bluetooth adapter successfully set to discoverable mode. " +
-                    "Any A2DP source can find it with the name " + ADAPTER_FRIENDLY_NAME +
-                    " and pair for the next " + DISCOVERABLE_TIMEOUT_MS + " ms. " +
+            Log.i(TAG, "Bluetooth adapter successfully set to discoverable mode." +
+                    "Any A2DP source can find it with the name " + ADAPTER_FRIENDLY_NAME + " and pair for the next " + DISCOVERABLE_TIMEOUT_S + " seconds." +
                     "Try looking for it on your phone, for example.");
 
             // There is nothing else required here, since Android framework automatically handles
@@ -300,9 +287,8 @@ public class A2dpSinkActivity extends Activity {
             // generate corresponding broadcast intents or profile proxy events that you can
             // listen to and react appropriately.
 
-            speak("Bluetooth audio sink is discoverable for " + DISCOVERABLE_TIMEOUT_MS +
-                    " milliseconds. Look for a device named " + ADAPTER_FRIENDLY_NAME);
-
+            blinkLed();
+            speak("Bluetooth audio sink is discoverable for " + DISCOVERABLE_TIMEOUT_S + " seconds. Look for a device named " + ADAPTER_FRIENDLY_NAME);
         }
     }
 
@@ -311,7 +297,7 @@ public class A2dpSinkActivity extends Activity {
             return;
         }
         speak("Disconnecting devices");
-        for (BluetoothDevice device: mA2DPSinkProxy.getConnectedDevices()) {
+        for (BluetoothDevice device : mA2DPSinkProxy.getConnectedDevices()) {
             Log.i(TAG, "Disconnecting device " + device);
             A2dpSinkHelper.disconnect(mA2DPSinkProxy, device);
         }
@@ -319,18 +305,26 @@ public class A2dpSinkActivity extends Activity {
 
     private void configureButton() {
         try {
-            mPairingButtonDriver = new ButtonInputDriver(BoardDefaults.getGPIOForPairing(),
-                    Button.LogicState.PRESSED_WHEN_LOW, KeyEvent.KEYCODE_P);
+            mPairingButtonDriver = new ButtonInputDriver(BoardDefaults.getGPIOForPairing(), Button.LogicState.PRESSED_WHEN_LOW, KeyEvent.KEYCODE_P);
             mPairingButtonDriver.register();
-            mDisconnectAllButtonDriver = new ButtonInputDriver(
-                    BoardDefaults.getGPIOForDisconnectAllBTDevices(),
-                    Button.LogicState.PRESSED_WHEN_LOW, KeyEvent.KEYCODE_D);
-            mDisconnectAllButtonDriver.register();
         } catch (IOException e) {
-            Log.w(TAG, "Could not register GPIO button drivers. Use keyboard events to trigger " +
-                    "the functions instead", e);
+            Log.w(TAG, "Could not register GPIO button drivers. Use keyboard events to trigger the functions instead", e);
         }
     }
+
+
+    private void configureLed() {
+        PeripheralManagerService pioService = new PeripheralManagerService();
+        try {
+            Log.i(TAG, "Configuring LED pin");
+            mLedGpio = pioService.openGpio(BoardDefaults.getGPIOForLED());
+            mLedGpio.setDirection(Gpio.DIRECTION_OUT_INITIALLY_LOW);
+
+        } catch (IOException e) {
+            Log.e(TAG, "Error LED pin", e);
+        }
+    }
+
 
     private void initTts() {
         mTtsEngine = new TextToSpeech(A2dpSinkActivity.this,
@@ -340,19 +334,35 @@ public class A2dpSinkActivity extends Activity {
                         if (status == TextToSpeech.SUCCESS) {
                             mTtsEngine.setLanguage(Locale.US);
                         } else {
-                            Log.w(TAG, "Could not open TTS Engine (onInit status=" + status
-                                    + "). Ignoring text to speech");
+                            Log.w(TAG, "Could not open TTS Engine (onInit status=" + status + "). Ignoring text to speech");
                             mTtsEngine = null;
                         }
                     }
                 });
     }
 
-
     private void speak(String utterance) {
         Log.i(TAG, utterance);
         if (mTtsEngine != null) {
             mTtsEngine.speak(utterance, TextToSpeech.QUEUE_ADD, null, UTTERANCE_ID);
         }
+    }
+
+    /**
+     * Update the value of the LED output.
+     */
+    private void setLedValue(boolean value) {
+        try {
+            mLedGpio.setValue(value);
+        } catch (IOException e) {
+            Log.e(TAG, "Error updating GPIO value", e);
+        }
+    }
+
+    /**
+     * blink LED
+     */
+    private void blinkLed() {
+        //TODO Timer based toggling of LED state
     }
 }

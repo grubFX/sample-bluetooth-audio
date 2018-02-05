@@ -41,16 +41,18 @@ public class BoardDefaults {
     }
 
     /**
-     * Return the GPIO pin with a button that will trigger the Disconnect All command.
+     * Return the GPIO pin that the LED is connected on.
+     * For example, on Intel Edison Arduino breakout, pin "IO13" is connected to an onboard LED
+     * that turns on when the GPIO pin is HIGH, and off when low.
      */
-    public static String getGPIOForDisconnectAllBTDevices() {
+    public static String getGPIOForLED() {
         switch (Build.DEVICE) {
             case DEVICE_RPI3:
-                return "BCM20";
+                return "BCM6";
             case DEVICE_IMX6UL_PICO:
                 return "GPIO4_IO22";
             case DEVICE_IMX7D_PICO:
-                return "GPIO6_IO15";
+                return "GPIO2_IO02";
             default:
                 throw new IllegalStateException("Unknown Build.DEVICE " + Build.DEVICE);
         }
