@@ -40,6 +40,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import static java.lang.Thread.sleep;
 
 /**
  * Sample usage of the A2DP sink bluetooth profile. At startup, this activity sets the Bluetooth
@@ -60,12 +64,15 @@ public class A2dpSinkActivity extends Activity {
     private static final String ADAPTER_FRIENDLY_NAME = "grubFX Jukebox";
     private static final int DISCOVERABLE_TIMEOUT_S = 10;
     private static final int REQUEST_CODE_ENABLE_DISCOVERABLE = 100;
+    private static final int LED_BLINK_SLEEP_MS = 500;
     private static final String UTTERANCE_ID = "net.felixgruber.www.samples.bluetooth.audio.UTTERANCE_ID";
     private BluetoothAdapter mBluetoothAdapter;
     private BluetoothProfile mA2DPSinkProxy;
     private ButtonInputDriver mPairingButtonDriver;
     private Gpio mLedGpio;
+    private boolean doBlink;
     private TextToSpeech mTtsEngine;
+    private ExecutorService executorService;
 
     /**
      * Handle an intent that is broadcast by the Bluetooth adapter whenever it changes its
@@ -102,11 +109,13 @@ public class A2dpSinkActivity extends Activity {
                 if (device != null) {
                     String deviceName = Objects.toString(device.getName(), "a device");
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
-                        setLedValue(true);
                         speak("Connected to " + deviceName);
+                        stopBlinkingLed();
+                        setLedValue(true);
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                        setLedValue(false);
                         speak("Disconnected from " + deviceName);
+                        stopBlinkingLed();
+                        setLedValue(false);
                     }
                 }
             }
@@ -142,6 +151,9 @@ public class A2dpSinkActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        doBlink = false;
+        executorService = Executors.newSingleThreadExecutor();
+
         mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         if (mBluetoothAdapter == null) {
             Log.w(TAG, "No default Bluetooth adapter. Device likely does not support bluetooth.");
@@ -162,7 +174,6 @@ public class A2dpSinkActivity extends Activity {
             Log.d(TAG, "Bluetooth adapter not enabled. Enabling.");
             mBluetoothAdapter.enable();
         }
-
     }
 
     @Override
@@ -278,8 +289,8 @@ public class A2dpSinkActivity extends Activity {
                 Log.e(TAG, "Enable discoverable has been cancelled by the user. This should never happen in an Android Things device.");
                 return;
             }
-            Log.i(TAG, "Bluetooth adapter successfully set to discoverable mode." +
-                    "Any A2DP source can find it with the name " + ADAPTER_FRIENDLY_NAME + " and pair for the next " + DISCOVERABLE_TIMEOUT_S + " seconds." +
+            Log.i(TAG, "Bluetooth adapter successfully set to discoverable mode. " +
+                    "Any A2DP source can find it with the name " + ADAPTER_FRIENDLY_NAME + " and pair for the next " + DISCOVERABLE_TIMEOUT_S + " seconds. " +
                     "Try looking for it on your phone, for example.");
 
             // There is nothing else required here, since Android framework automatically handles
@@ -312,7 +323,6 @@ public class A2dpSinkActivity extends Activity {
         }
     }
 
-
     private void configureLed() {
         PeripheralManagerService pioService = new PeripheralManagerService();
         try {
@@ -324,7 +334,6 @@ public class A2dpSinkActivity extends Activity {
             Log.e(TAG, "Error LED pin", e);
         }
     }
-
 
     private void initTts() {
         mTtsEngine = new TextToSpeech(A2dpSinkActivity.this,
@@ -360,9 +369,29 @@ public class A2dpSinkActivity extends Activity {
     }
 
     /**
-     * blink LED
+     * doBlink LED
      */
     private void blinkLed() {
-        //TODO Timer based toggling of LED state
+        doBlink = true;
+        executorService.execute(new Runnable() {
+            @Override
+            public void run() {
+                while (doBlink && mLedGpio != null) {
+                    try {
+                        setLedValue(!mLedGpio.getValue());
+                        sleep(LED_BLINK_SLEEP_MS);
+                    } catch (IOException | InterruptedException e) {
+                        Log.w(TAG, "Exception in mThread.run(): ", e);
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * stop blinking LED
+     */
+    private void stopBlinkingLed() {
+        doBlink = false;
     }
 }
