@@ -164,7 +164,8 @@ public class A2dpSinkActivity extends Activity {
         mDatabase = FirebaseDatabase.getInstance();
         mRef = mDatabase.getReference("devices");
 
-        doBlink = false;
+        stopBlinkingLed();
+
         executorService = Executors.newSingleThreadExecutor();
 
         mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
