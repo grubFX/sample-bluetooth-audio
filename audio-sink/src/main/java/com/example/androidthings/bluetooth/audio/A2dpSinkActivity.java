@@ -113,6 +113,7 @@ public class A2dpSinkActivity extends Activity {
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
                         if (mDatabase != null && mRef != null) {
                             mRef.child(ADAPTER_FRIENDLY_NAME).child("last_connect").setValue(System.currentTimeMillis());
+                            mRef.child(ADAPTER_FRIENDLY_NAME).child("last_connected_device").setValue(deviceName);
                         }
                         speak("Connected to " + deviceName);
                         stopBlinkingLed();
@@ -120,6 +121,7 @@ public class A2dpSinkActivity extends Activity {
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                         if (mDatabase != null && mRef != null) {
                             mRef.child(ADAPTER_FRIENDLY_NAME).child("last_disconnect").setValue(System.currentTimeMillis());
+                            mRef.child(ADAPTER_FRIENDLY_NAME).child("last_disconnected_device").setValue(deviceName);
                         }
                         speak("Disconnected from " + deviceName);
                         stopBlinkingLed();
