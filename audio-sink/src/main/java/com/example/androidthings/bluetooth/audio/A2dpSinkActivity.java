@@ -34,6 +34,8 @@ import com.google.android.things.contrib.driver.button.Button;
 import com.google.android.things.contrib.driver.button.ButtonInputDriver;
 import com.google.android.things.pio.Gpio;
 import com.google.android.things.pio.PeripheralManagerService;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -42,8 +44,6 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
-import static java.lang.Thread.sleep;
 
 /**
  * Sample usage of the A2DP sink bluetooth profile. At startup, this activity sets the Bluetooth
@@ -73,6 +73,8 @@ public class A2dpSinkActivity extends Activity {
     private boolean doBlink;
     private TextToSpeech mTtsEngine;
     private ExecutorService executorService;
+    private FirebaseDatabase mDatabase;
+    private DatabaseReference mRef;
 
     /**
      * Handle an intent that is broadcast by the Bluetooth adapter whenever it changes its
@@ -109,10 +111,16 @@ public class A2dpSinkActivity extends Activity {
                 if (device != null) {
                     String deviceName = Objects.toString(device.getName(), "a device");
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
+                        if (mDatabase != null && mRef != null) {
+                            mRef.child(ADAPTER_FRIENDLY_NAME).child("last_connect").setValue(System.currentTimeMillis());
+                        }
                         speak("Connected to " + deviceName);
                         stopBlinkingLed();
                         setLedValue(true);
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                        if (mDatabase != null && mRef != null) {
+                            mRef.child(ADAPTER_FRIENDLY_NAME).child("last_disconnect").setValue(System.currentTimeMillis());
+                        }
                         speak("Disconnected from " + deviceName);
                         stopBlinkingLed();
                         setLedValue(false);
@@ -151,6 +159,9 @@ public class A2dpSinkActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        mDatabase = FirebaseDatabase.getInstance();
+        mRef = mDatabase.getReference("devices");
+
         doBlink = false;
         executorService = Executors.newSingleThreadExecutor();
 
@@ -180,6 +191,9 @@ public class A2dpSinkActivity extends Activity {
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         switch (keyCode) {
             case KeyEvent.KEYCODE_P:
+                if (mDatabase != null && mRef != null) {
+                    mRef.child(ADAPTER_FRIENDLY_NAME).child("last_pairing_start").setValue(System.currentTimeMillis());
+                }
                 // Enable Pairing mode (discoverable)
                 disconnectConnectedDevices();
                 enableDiscoverable();
@@ -369,7 +383,7 @@ public class A2dpSinkActivity extends Activity {
     }
 
     /**
-     * doBlink LED
+     * blink LED
      */
     private void blinkLed() {
         doBlink = true;
@@ -379,9 +393,9 @@ public class A2dpSinkActivity extends Activity {
                 while (doBlink && mLedGpio != null) {
                     try {
                         setLedValue(!mLedGpio.getValue());
-                        sleep(LED_BLINK_SLEEP_MS);
+                        Thread.sleep(LED_BLINK_SLEEP_MS);
                     } catch (IOException | InterruptedException e) {
-                        Log.w(TAG, "Exception in mThread.run(): ", e);
+                        Log.w(TAG, "Exception in LED blinking thread: ", e);
                     }
                 }
             }
